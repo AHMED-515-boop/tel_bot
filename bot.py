@@ -15,7 +15,7 @@ questions_db = {}
 question_counter = 0
 
 # Admin user ID (you need to set this to your Telegram user ID)
-ADMIN_USER_ID = int(os.getenv('8011237487', '0'))  # Replace with your user ID
+ADMIN_USER_ID = int(os.getenv('8011237487', '8011237487')) or "8011237487"  # Replace with your user ID
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
