@@ -9,7 +9,7 @@ from telegram.ext import (
 
 # === Configuration ===
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
-ADMIN_ID = int(os.getenv("ADMIN_ID", "8011237487"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1114684570"))
 
 # === Logging ===
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
