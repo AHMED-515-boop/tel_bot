@@ -1,672 +1,238 @@
-# requirements.txt
-python-telegram-bot==20.7
-sqlite3
-
-# Procfile
-web: python main.py
-
-# railway.json
-{
-  "build": {
-    "builder": "NIXPACKS"
-  },
-  "deploy": {
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  }
-}
-
-# .env (create this file and add your variables)
-BOT_TOKEN="7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
-ADMIN_CHAT_ID="8011237487"
-
-# main.py (Updated version for Railway deployment)
-import logging
-import json
 import os
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from datetime import datetime
-import sqlite3
-from pathlib import Path
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# Configure logging
+# Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Bot configuration - Using environment variables for Railway
-BOT_TOKEN = os.getenv('BOT_TOKEN') or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID') or "8011237487"
+# Store questions and answers
+questions_db = {}
+question_counter = 0
 
-# Validate environment variables
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required")
-if not ADMIN_CHAT_ID:
-    raise ValueError("ADMIN_CHAT_ID environment variable is required")
+# Admin user ID (you need to set this to your Telegram user ID)
+ADMIN_USER_ID = int(os.getenv('8011237487', '0'))  # Replace with your user ID
 
-class SupportBot:
-    def __init__(self):
-        self.db_path = Path("support_bot.db")
-        self.init_database()
-    
-    def init_database(self):
-        """Initialize SQLite database for storing questions and answers"""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        
-        # Create tables
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS questions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                username TEXT,
-                question TEXT,
-                timestamp DATETIME,
-                status TEXT DEFAULT 'pending',
-                admin_reply TEXT,
-                reply_timestamp DATETIME
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS admins (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT
-            )
-        ''')
-        
-        self.conn.commit()
-        logger.info("Database initialized successfully")
-    
-    def add_admin(self, user_id, username):
-        """Add admin to database"""
-        self.cursor.execute(
-            "INSERT OR REPLACE INTO admins (user_id, username) VALUES (?, ?)",
-            (user_id, username)
-        )
-        self.conn.commit()
-    
-    def is_admin(self, user_id):
-        """Check if user is admin"""
-        self.cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
-        return self.cursor.fetchone() is not None
-    
-    def save_question(self, user_id, username, question):
-        """Save user question to database"""
-        self.cursor.execute(
-            "INSERT INTO questions (user_id, username, question, timestamp) VALUES (?, ?, ?, ?)",
-            (user_id, username, question, datetime.now())
-        )
-        self.conn.commit()
-        return self.cursor.lastrowid
-    
-    def get_pending_questions(self):
-        """Get all pending questions"""
-        self.cursor.execute(
-            "SELECT id, user_id, username, question, timestamp FROM questions WHERE status = 'pending' ORDER BY timestamp DESC"
-        )
-        return self.cursor.fetchall()
-    
-    def get_question_by_id(self, question_id):
-        """Get specific question by ID"""
-        self.cursor.execute(
-            "SELECT id, user_id, username, question, timestamp FROM questions WHERE id = ?",
-            (question_id,)
-        )
-        return self.cursor.fetchone()
-    
-    def update_question_status(self, question_id, status, admin_reply=None):
-        """Update question status and admin reply"""
-        if admin_reply:
-            self.cursor.execute(
-                "UPDATE questions SET status = ?, admin_reply = ?, reply_timestamp = ? WHERE id = ?",
-                (status, admin_reply, datetime.now(), question_id)
-            )
-        else:
-            self.cursor.execute(
-                "UPDATE questions SET status = ? WHERE id = ?",
-                (status, question_id)
-            )
-        self.conn.commit()
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a message when the command /start is issued."""
+    await update.message.reply_text(
+        'Hi! I\'m a Q&A bot. Send me your question and I\'ll forward it to the admin.\n'
+        'The admin will answer and I\'ll send the response back to you!'
+    )
 
-# Initialize bot instance
-support_bot = SupportBot()
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    user = update.effective_user
-    
-    welcome_message = f"""
-🤖 Welcome to Support Bot, {user.first_name}!
-
-I'm here to help you get support from our administrators.
-
-📝 Simply send me your question and I'll forward it to our admin team.
-⏰ You'll receive a response as soon as possible.
-
-Commands:
-/help - Show this help message
-/status - Check your question status (for admins)
-/questions - View pending questions (admin only)
-"""
-    
-    await update.message.reply_text(welcome_message)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a message when the command /help is issued."""
     help_text = """
-🆘 *Support Bot Help*
+Available commands:
+/start - Start the bot
+/help - Show this help message
 
-*For Users:*
-• Send any message with your question
-• I'll forward it to our admin team
-• Wait for a response from administrators
+How to use:
+1. Send me any question as a regular message
+2. I'll forward it to the admin
+3. The admin will answer and you'll get the response
+    """
+    await update.message.reply_text(help_text)
 
-*For Admins:*
-• `/questions` - View all pending questions
-• `/status` - Check bot status
-• Reply to forwarded messages to answer questions
-
-*How it works:*
-1. User sends a question
-2. Bot forwards to admin
-3. Admin replies to the forwarded message
-4. Bot sends admin's reply back to user
-"""
+async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming questions from users."""
+    global question_counter
     
-    await update.message.reply_text(help_text, parse_mode='Markdown')
-
-async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user questions"""
     user = update.effective_user
     question = update.message.text
     
-    # Don't process commands as questions
-    if question.startswith('/'):
+    # Skip if message is from admin
+    if user.id == ADMIN_USER_ID:
         return
     
-    # Save question to database
-    question_id = support_bot.save_question(
-        user.id, 
-        user.username or user.first_name, 
-        question
-    )
+    question_counter += 1
+    question_id = f"q_{question_counter}"
     
-    # Send confirmation to user
+    # Store question details
+    questions_db[question_id] = {
+        'user_id': user.id,
+        'username': user.username or 'Unknown',
+        'first_name': user.first_name or 'Unknown',
+        'question': question,
+        'answered': False
+    }
+    
+    # Confirm receipt to user
     await update.message.reply_text(
-        f"✅ Your question has been received!\n\n"
-        f"Question ID: #{question_id}\n"
-        f"Our admin team will respond soon."
+        "Thank you for your question! I've forwarded it to the admin. "
+        "You'll receive an answer soon."
     )
     
-    # Forward to admin with inline keyboard
-    admin_keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("💬 Reply", callback_data=f"reply_{question_id}"),
-            InlineKeyboardButton("✅ Quick Answer", callback_data=f"answer_{question_id}")
-        ],
-        [
-            InlineKeyboardButton("❌ Close", callback_data=f"close_{question_id}"),
-            InlineKeyboardButton("📋 View All", callback_data=f"viewall")
+    # Forward to admin with answer button
+    if ADMIN_USER_ID:
+        admin_message = f"📋 New Question (ID: {question_id})\n\n"
+        admin_message += f"👤 From: {user.first_name}"
+        if user.username:
+            admin_message += f" (@{user.username})"
+        admin_message += f"\n🆔 User ID: {user.id}\n\n"
+        admin_message += f"❓ Question: {question}"
+        
+        # Create inline keyboard with answer button
+        keyboard = [
+            [InlineKeyboardButton("📝 Answer", callback_data=f"answer_{question_id}")],
+            [InlineKeyboardButton("❌ Mark as Spam", callback_data=f"spam_{question_id}")]
         ]
-    ])
-    
-    admin_message = f"""
-🔔 *New Question Received*
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_USER_ID,
+                text=admin_message,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.error(f"Failed to send message to admin: {e}")
 
-*From:* {user.first_name} (@{user.username or 'No username'})
-*User ID:* `{user.id}`
-*Question ID:* #{question_id}
-*Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-*Question:*
-{question}
-
-📝 *Instructions:*
-• Click "💬 Reply" to send a custom response
-• Click "✅ Quick Answer" for common responses
-• Click "❌ Close" to mark as resolved
-"""
-    
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_message,
-            reply_markup=admin_keyboard,
-            parse_mode='Markdown'
-        )
-        logger.info(f"Question #{question_id} forwarded to admin")
-    except Exception as e:
-        logger.error(f"Failed to send message to admin: {e}")
-
-async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin callback buttons"""
+async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle admin button presses."""
     query = update.callback_query
-    user_id = query.from_user.id
+    await query.answer()
     
     # Check if user is admin
-    if not support_bot.is_admin(user_id):
-        await query.answer("❌ You are not authorized to use this feature.")
+    if query.from_user.id != ADMIN_USER_ID:
+        await query.edit_message_text("❌ You're not authorized to use this.")
         return
     
     data = query.data
     
-    if data == "viewall":
-        await query.answer("📋 Loading all questions...")
-        await view_questions_inline(update, context)
-        return
-    
-    action, question_id = data.split('_')
-    question_id = int(question_id)
-    
-    if action == "reply":
-        await query.answer("💬 Please type your reply message.")
-        # Store the question ID in user data for the next message
-        context.user_data['replying_question'] = question_id
+    if data.startswith("answer_"):
+        question_id = data.replace("answer_", "")
         
-        # Show a prompt message
-        await query.message.reply_text(
-            f"💬 *Replying to Question #{question_id}*\n\n"
-            f"Please type your reply message below. It will be sent directly to the user.\n\n"
-            f"Type /cancel to cancel this reply.",
-            parse_mode='Markdown'
-        )
-        
-    elif action == "answer":
-        # Show quick answer options
-        quick_answers_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Thank you for your question", callback_data=f"quick_thanks_{question_id}")],
-            [InlineKeyboardButton("⏳ We're working on it", callback_data=f"quick_working_{question_id}")],
-            [InlineKeyboardButton("📞 Please contact support", callback_data=f"quick_contact_{question_id}")],
-            [InlineKeyboardButton("❓ Need more information", callback_data=f"quick_info_{question_id}")],
-            [InlineKeyboardButton("💬 Custom Reply", callback_data=f"reply_{question_id}")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"back_{question_id}")]
-        ])
-        
-        await query.edit_message_text(
-            text=query.message.text + "\n\n🤖 *Quick Answer Options:*",
-            reply_markup=quick_answers_keyboard,
-            parse_mode='Markdown'
-        )
-        
-    elif action == "close":
-        support_bot.update_question_status(question_id, "closed")
-        await query.answer("✅ Question closed.")
-        
-        # Update the message to show it's closed
-        await query.edit_message_text(
-            text=query.message.text + "\n\n❌ *Question Closed*",
-            parse_mode='Markdown'
-        )
-        
-        # Notify user that question was closed
-        question_data = support_bot.get_question_by_id(question_id)
-        if question_data:
-            _, original_user_id, username, original_question, timestamp = question_data
-            try:
-                await context.bot.send_message(
-                    chat_id=original_user_id,
-                    text=f"📝 Your question #{question_id} has been closed by our admin team.\n\n"
-                         f"If you need further assistance, please send a new question.",
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Failed to notify user about closed question: {e}")
-    
-    elif action.startswith("quick_"):
-        # Handle quick answers
-        quick_type = action.replace("quick_", "")
-        quick_responses = {
-            "thanks": "✅ Thank you for your question! Our team has received it and will get back to you soon.",
-            "working": "⏳ Thank you for your question! We're currently working on this issue and will update you shortly.",
-            "contact": "📞 Please contact our support team directly for immediate assistance with this matter.",
-            "info": "❓ Thank you for your question! We need a bit more information to help you better. Please provide additional details."
-        }
-        
-        reply_text = quick_responses.get(quick_type, "Thank you for your question!")
-        
-        # Send quick answer to user
-        question_data = support_bot.get_question_by_id(question_id)
-        if question_data:
-            _, original_user_id, username, original_question, timestamp = question_data
-            
-            # Update question status
-            support_bot.update_question_status(question_id, "answered", reply_text)
-            
-            try:
-                await context.bot.send_message(
-                    chat_id=original_user_id,
-                    text=f"✅ *Your Question Has Been Answered*\n\n"
-                         f"*Your Question:*\n{original_question}\n\n"
-                         f"*Admin Reply:*\n{reply_text}\n\n"
-                         f"*Question ID:* #{question_id}",
-                    parse_mode='Markdown'
-                )
-                
-                await query.answer("✅ Quick answer sent!")
-                
-                # Update the admin message
-                await query.edit_message_text(
-                    text=query.message.text + f"\n\n✅ *Quick Answer Sent:*\n{reply_text}",
-                    parse_mode='Markdown'
-                )
-                
-            except Exception as e:
-                await query.answer(f"❌ Failed to send quick answer: {e}")
-                logger.error(f"Failed to send quick answer: {e}")
-    
-    elif action == "back":
-        # Go back to original question view
-        question_data = support_bot.get_question_by_id(question_id)
-        if question_data:
-            _, original_user_id, username, original_question, timestamp = question_data
-            
-            # Recreate original keyboard
-            admin_keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("💬 Reply", callback_data=f"reply_{question_id}"),
-                    InlineKeyboardButton("✅ Quick Answer", callback_data=f"answer_{question_id}")
-                ],
-                [
-                    InlineKeyboardButton("❌ Close", callback_data=f"close_{question_id}"),
-                    InlineKeyboardButton("📋 View All", callback_data=f"viewall")
-                ]
-            ])
-            
-            original_message = f"""
-🔔 *New Question Received*
-
-*From:* {username}
-*User ID:* `{original_user_id}`
-*Question ID:* #{question_id}
-*Time:* {timestamp}
-
-*Question:*
-{original_question}
-
-📝 *Instructions:*
-• Click "💬 Reply" to send a custom response
-• Click "✅ Quick Answer" for common responses
-• Click "❌ Close" to mark as resolved
-"""
-            
+        if question_id in questions_db and not questions_db[question_id]['answered']:
+            # Update the message to show it's being answered
             await query.edit_message_text(
-                text=original_message,
-                reply_markup=admin_keyboard,
+                query.message.text + "\n\n✏️ **Status: Waiting for your answer...**\n"
+                "Please reply to this message with your answer.",
+                parse_mode='Markdown'
+            )
+            
+            # Store that admin is answering this question
+            context.user_data['answering_question'] = question_id
+        else:
+            await query.edit_message_text(
+                query.message.text + "\n\n❌ **This question has already been answered or doesn't exist.**",
+                parse_mode='Markdown'
+            )
+    
+    elif data.startswith("spam_"):
+        question_id = data.replace("spam_", "")
+        
+        if question_id in questions_db:
+            questions_db[question_id]['answered'] = True
+            await query.edit_message_text(
+                query.message.text + "\n\n🚫 **Status: Marked as spam**",
                 parse_mode='Markdown'
             )
 
-async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin replies to questions"""
-    user_id = update.effective_user.id
-    
+async def handle_admin_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle admin's answer to a question."""
     # Check if user is admin
-    if not support_bot.is_admin(user_id):
+    if update.effective_user.id != ADMIN_USER_ID:
         return
     
-    message_text = update.message.text
-    
-    # Check if admin wants to cancel
-    if message_text.lower() == '/cancel':
-        if 'replying_question' in context.user_data:
-            del context.user_data['replying_question']
-            await update.message.reply_text("❌ Reply cancelled.")
+    # Check if admin is answering a question
+    if 'answering_question' not in context.user_data:
         return
     
-    # Check if admin is replying to a question
-    question_id = None
-    if 'replying_question' in context.user_data:
-        question_id = context.user_data['replying_question']
-    elif 'answering_question' in context.user_data:
-        question_id = context.user_data['answering_question']
+    question_id = context.user_data['answering_question']
     
-    if not question_id:
-        return
-    
-    admin_reply = message_text
-    
-    # Get the original question
-    question_data = support_bot.get_question_by_id(question_id)
-    if not question_data:
-        await update.message.reply_text("❌ Question not found.")
-        return
-    
-    _, original_user_id, username, original_question, timestamp = question_data
-    
-    # Update question status
-    support_bot.update_question_status(question_id, "answered", admin_reply)
-    
-    # Send reply to original user
-    user_message = f"""
-✅ *Your Question Has Been Answered*
-
-*Your Question:*
-{original_question}
-
-*Admin Reply:*
-{admin_reply}
-
-*Question ID:* #{question_id}
-*Replied on:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-    
-    try:
-        await context.bot.send_message(
-            chat_id=original_user_id,
-            text=user_message,
-            parse_mode='Markdown'
-        )
-        
-        await update.message.reply_text(
-            f"✅ *Reply Sent Successfully!*\n\n"
-            f"📝 Question ID: #{question_id}\n"
-            f"👤 User: {username}\n"
-            f"💬 Your reply has been delivered to the user.",
-            parse_mode='Markdown'
-        )
-        
-        logger.info(f"Reply sent for question #{question_id}")
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Failed to send reply to user: {e}")
-        logger.error(f"Failed to send reply to user: {e}")
-    
-    # Clear the replying/answering state
-    if 'replying_question' in context.user_data:
-        del context.user_data['replying_question']
-    if 'answering_question' in context.user_data:
+    if question_id not in questions_db or questions_db[question_id]['answered']:
+        await update.message.reply_text("❌ This question has already been answered or doesn't exist.")
         del context.user_data['answering_question']
-
-async def view_questions_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View all pending questions inline"""
-    user_id = update.effective_user.id
-    
-    if not support_bot.is_admin(user_id):
         return
     
-    questions = support_bot.get_pending_questions()
+    answer = update.message.text
+    question_data = questions_db[question_id]
     
-    if not questions:
-        await update.callback_query.message.reply_text("📭 No pending questions.")
-        return
-    
-    # Create buttons for each question
-    keyboard = []
-    for q_id, user_id, username, question, timestamp in questions[:10]:  # Limit to 10 questions
-        question_preview = question[:30] + "..." if len(question) > 30 else question
-        keyboard.append([
-            InlineKeyboardButton(
-                f"#{q_id}: {question_preview}", 
-                callback_data=f"view_question_{q_id}"
-            )
-        ])
-    
-    if len(questions) > 10:
-        keyboard.append([InlineKeyboardButton("📄 View More", callback_data="view_more")])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.callback_query.message.reply_text(
-        f"📋 *Pending Questions ({len(questions)} total)*\n\n"
-        f"Select a question to view details:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-async def view_questions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View all pending questions (admin only)"""
-    user_id = update.effective_user.id
-    
-    if not support_bot.is_admin(user_id):
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    questions = support_bot.get_pending_questions()
-    
-    if not questions:
-        await update.message.reply_text("📭 No pending questions.")
-        return
-    
-    # Create interactive buttons for each question
-    keyboard = []
-    for q_id, user_id, username, question, timestamp in questions[:10]:  # Limit to 10 questions
-        question_preview = question[:30] + "..." if len(question) > 30 else question
-        keyboard.append([
-            InlineKeyboardButton(
-                f"#{q_id}: {question_preview}", 
-                callback_data=f"view_question_{q_id}"
-            )
-        ])
-    
-    if len(questions) > 10:
-        keyboard.append([InlineKeyboardButton("📄 Show All", callback_data="show_all_questions")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f"📋 *Pending Questions ({len(questions)} total)*\n\n"
-        f"Click on a question to view details and reply:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add admin (use this command initially to set up admins)"""
-    user = update.effective_user
-    support_bot.add_admin(user.id, user.username or user.first_name)
-    await update.message.reply_text(f"✅ {user.first_name} added as admin!")
-    logger.info(f"Admin added: {user.first_name} (ID: {user.id})")
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check bot status"""
-    user_id = update.effective_user.id
-    
-    if not support_bot.is_admin(user_id):
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    # Get database stats
-    support_bot.cursor.execute("SELECT COUNT(*) FROM questions")
-    total_questions = support_bot.cursor.fetchone()[0]
-    
-    support_bot.cursor.execute("SELECT COUNT(*) FROM questions WHERE status = 'pending'")
-    pending_questions = support_bot.cursor.fetchone()[0]
-    
-    support_bot.cursor.execute("SELECT COUNT(*) FROM admins")
-    total_admins = support_bot.cursor.fetchone()[0]
-    
-    status_message = f"""
-📊 *Bot Status*
-
-*Database:* ✅ Connected
-*Total Questions:* {total_questions}
-*Pending Questions:* {pending_questions}
-*Total Admins:* {total_admins}
-
-*Environment:* Railway
-*Status:* 🟢 Online
-"""
-    
-    await update.message.reply_text(status_message, parse_mode='Markdown')
-
-def main():
-    """Start the bot"""
+    # Send answer to the original user
     try:
-        # Create application
-        application = Application.builder().token(BOT_TOKEN).build()
+        answer_message = f"✅ **Answer to your question:**\n\n"
+        answer_message += f"❓ Your question: {question_data['question']}\n\n"
+        answer_message += f"💬 Admin's answer: {answer}"
         
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("questions", view_questions))
-        application.add_handler(CommandHandler("addadmin", add_admin_command))
-        application.add_handler(CommandHandler("status", status_command))
+        await context.bot.send_message(
+            chat_id=question_data['user_id'],
+            text=answer_message,
+            parse_mode='Markdown'
+        )
         
-        # Callback query handler for admin buttons
-        application.add_handler(CallbackQueryHandler(handle_admin_callback))
+        # Mark as answered
+        questions_db[question_id]['answered'] = True
         
-        # Message handlers
-        application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND, 
-            lambda update, context: (
-                handle_admin_reply(update, context) 
-                if support_bot.is_admin(update.effective_user.id) and 
-                   ('replying_question' in context.user_data or 'answering_question' in context.user_data)
-                else handle_question(update, context)
-            )
-        ))
-        
-        # Start the bot
-        logger.info("🤖 Support Bot is starting on Railway...")
-        print("🤖 Support Bot is starting on Railway...")
-        
-        # Use webhook for Railway deployment
-        PORT = int(os.environ.get('PORT', 8000))
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=f"https://{os.environ.get('RAILWAY_STATIC_URL', 'localhost')}"
+        # Confirm to admin
+        await update.message.reply_text(
+            f"✅ Answer sent successfully to {question_data['first_name']}!"
         )
         
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        print(f"Failed to start bot: {e}")
+        await update.message.reply_text(f"❌ Failed to send answer: {str(e)}")
+        logger.error(f"Failed to send answer: {e}")
+    
+    # Clear the answering state
+    del context.user_data['answering_question']
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show admin statistics."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ You're not authorized to use this command.")
+        return
+    
+    total_questions = len(questions_db)
+    answered_questions = sum(1 for q in questions_db.values() if q['answered'])
+    pending_questions = total_questions - answered_questions
+    
+    stats_message = f"📊 **Bot Statistics**\n\n"
+    stats_message += f"📝 Total questions: {total_questions}\n"
+    stats_message += f"✅ Answered: {answered_questions}\n"
+    stats_message += f"⏳ Pending: {pending_questions}"
+    
+    await update.message.reply_text(stats_message, parse_mode='Markdown')
+
+def main() -> None:
+    """Start the bot."""
+    # Get bot token from environment variable
+    token = os.getenv('BOT_TOKEN') or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
+    if not token:
+        logger.error("BOT_TOKEN environment variable is not set!")
+        return
+    
+    if ADMIN_USER_ID == 0:
+        logger.error("ADMIN_USER_ID environment variable is not set!")
+        return
+    
+    # Create the Application
+    application = Application.builder().token(token).build()
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("stats", admin_stats))
+    application.add_handler(CallbackQueryHandler(handle_admin_callback))
+    
+    # Handle admin answers (only when admin is answering)
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(user_id=ADMIN_USER_ID) & ~filters.COMMAND,
+        handle_admin_answer
+    ))
+    
+    # Handle regular questions from users
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.User(user_id=ADMIN_USER_ID),
+        handle_question
+    ))
+    
+    # Start the bot
+    logger.info("Bot is starting...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
-
-# .gitignore
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git
-.mypy_cache
-.pytest_cache
-.hypothesis
-*.db
-*.sqlite3
-.env
-.DS_Store
-
-# runtime.txt
-python-3.11.0
