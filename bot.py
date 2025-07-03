@@ -161,7 +161,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    pending = [f"`{k}` - {v['username']}" for k, v in pending_questions.items() if v['status'] == 'pending']
+    pending = [f"`{k}` - {v['username']} - {q_data['question']}" for k, v , m in pending_questions.items() if v['status'] == 'pending']
     if not pending:
         await update.message.reply_text("✅ لا توجد أسئلة معلقة.")
     else:
