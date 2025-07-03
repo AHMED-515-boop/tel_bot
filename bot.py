@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '8011237487'))  # Replace with your Telegram user ID
+ADMIN_ID = int(os.getenv('ADMIN_ID', "8011237487"))  # Replace with your Telegram user ID
 QUESTIONS_FILE = 'questions.json'
 
 def load_questions():
