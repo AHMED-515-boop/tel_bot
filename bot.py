@@ -7,17 +7,17 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# --- Configuration ---
+# === Configuration ===
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8011237487"))
 
-# --- Logging ---
+# === Logging ===
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Bot State ---
+# === Bot State ===
 pending_questions = {}
-admin_answer_state = {}  # Stores: { admin_id: { "question_id": Q1, "message_id": 123 } }
+admin_answer_state = {}
 question_counter = 1
 
 def update_question_counter():
@@ -37,7 +37,7 @@ def save_question(user_id, username, question, question_id):
         'status': 'pending'
     }
 
-# --- Start Command ---
+# === /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id == ADMIN_ID:
@@ -45,25 +45,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("👋 مرحباً! أرسل سؤالك هنا، وسنقوم بالرد عليك.")
 
-# --- Handle Incoming Question ---
+# === Handle Incoming Questions ===
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global question_counter
     user = update.effective_user
     text = update.message.text
 
-    # Admin is replying
     if user.id == ADMIN_ID:
         await handle_admin_reply(update, context)
         return
 
-    # New user question
     question_id = f"Q{question_counter}"
     save_question(user.id, user.username or user.first_name, text, question_id)
     question_counter += 1
 
     await update.message.reply_text(f"✅ تم استلام سؤالك!\n🆔 رقم: {question_id}")
 
-    # Send to admin
     keyboard = [
         [InlineKeyboardButton("📝 إرسال إجابة", callback_data=f"answer_{question_id}")],
         [InlineKeyboardButton("🗑️ حذف السؤال", callback_data=f"delete_{question_id}")],
@@ -82,21 +79,18 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    # Save the message_id for later deletion
     admin_answer_state["last_question"] = {
         "question_id": question_id,
         "message_id": sent_msg.message_id
     }
 
-# --- Admin Reply ---
+# === Admin Answers ===
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "question_id" not in admin_answer_state.get(ADMIN_ID, {}):
         await update.message.reply_text("❗ اضغط أولاً على زر (📝 إرسال إجابة).")
         return
 
     question_id = admin_answer_state[ADMIN_ID]["question_id"]
-    message_id_to_delete = admin_answer_state[ADMIN_ID]["message_id"]
-
     if question_id not in pending_questions:
         await update.message.reply_text("❌ السؤال غير موجود.")
         del admin_answer_state[ADMIN_ID]
@@ -117,26 +111,19 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ),
             parse_mode='Markdown'
         )
-        # Mark answered
+
         q_data['status'] = 'answered'
         q_data['answer'] = answer
         q_data['answered_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Confirm to admin
         await update.message.reply_text("✅ تم إرسال الإجابة.")
-
-        # 🔥 Delete the admin's question message
-        try:
-            await context.bot.delete_message(chat_id=ADMIN_ID, message_id=message_id_to_delete)
-        except Exception as e:
-            logger.warning(f"Failed to delete admin message: {e}")
 
     except Exception as e:
         await update.message.reply_text(f"❌ فشل إرسال الإجابة: {e}")
 
     del admin_answer_state[ADMIN_ID]
 
-# --- Show Pending Questions ---
+# === Show Pending Questions ===
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -168,7 +155,7 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "message_id": msg.message_id
         }
 
-# --- Show Stats ---
+# === Show Stats ===
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -182,7 +169,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏳ معلق: {pending}"
     )
 
-# --- Reset Counter ---
+# === Reset Counter ===
 async def reset_counter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -190,7 +177,7 @@ async def reset_counter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question_counter = 1
     await update.message.reply_text("🔄 تم إعادة تعيين العداد إلى Q1.")
 
-# --- Button Actions ---
+# === Handle Inline Buttons ===
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -200,14 +187,27 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data
+
     if data.startswith("answer_"):
         qid = data.split("_")[1]
+
         if qid in pending_questions:
+            # Delete the message (hide question)
+            try:
+                await context.bot.delete_message(chat_id=ADMIN_ID, message_id=query.message.message_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete message: {e}")
+
             admin_answer_state[ADMIN_ID] = {
                 "question_id": qid,
                 "message_id": query.message.message_id
             }
-            await query.edit_message_text(f"✏️ أرسل الآن إجابتك للسؤال `{qid}`", parse_mode='Markdown')
+
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"✏️ أرسل الآن إجابتك للسؤال `{qid}`",
+                parse_mode='Markdown'
+            )
         else:
             await query.edit_message_text("❌ السؤال غير موجود.")
 
@@ -222,11 +222,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         question_counter = 1
         await query.edit_message_text("🔄 تم إعادة ضبط العداد إلى Q1.")
 
-# --- Error Logging ---
+# === Error Handler ===
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Exception:", exc_info=context.error)
 
-# --- Main Function ---
+# === Main ===
 def main():
     update_question_counter()
     app = Application.builder().token(BOT_TOKEN).build()
