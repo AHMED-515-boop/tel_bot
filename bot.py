@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 # --- Configuration ---
 BOT_TOKEN = "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"  # 🔒 Replace with your bot token from @BotFather
-ADMIN_USER_ID = 8011237487         # 👤 Replace with your Telegram user ID
+ADMIN_USER_ID = "8011237487"     # 👤 Replace with your Telegram user ID
 
 # --- Logging Setup ---
 logging.basicConfig(
