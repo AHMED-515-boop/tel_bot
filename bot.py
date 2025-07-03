@@ -7,15 +7,15 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# إعداد السجلات
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# إعداد السجل
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# التوكن والمعرّف
-BOT_TOKEN = os.environ.get('BOT_TOKEN') or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '8011237487'))
+# بيانات البوت
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8011237487"))
 
-# المتغيرات العامة
+# بيانات التشغيل
 pending_questions = {}
 admin_answer_state = {}
 question_counter = 1
@@ -37,38 +37,35 @@ def save_question(user_id, username, question, question_id):
         'status': 'pending'
     }
 
+# بدء المحادثة
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id == ADMIN_ID:
         await update.message.reply_text(
-            "👨‍💼 أهلاً بك أيها الأدمن!\n\n"
-            "/pending - عرض الأسئلة المعلقة\n"
-            "/stats - الإحصائيات\n"
-            "/reset_counter - إعادة تعيين العداد"
+            "👨‍💼 أهلاً بالأدمن!\n"
+            "الأوامر:\n/pending\n/stats\n/reset_counter"
         )
     else:
         await update.message.reply_text(
             f"مرحباً {user.first_name} 👋\n"
-            "أرسل سؤالك هنا وسنقوم بالرد عليك قريباً! 📝"
+            "أرسل سؤالك هنا وسنرد عليك في أقرب وقت! 📝"
         )
 
+# استقبال الأسئلة
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global question_counter
     user = update.effective_user
-    question = update.message.text
+    text = update.message.text
 
-    # تجاهل الأسئلة من الأدمن (يستخدم الرد من الزر)
     if user.id == ADMIN_ID:
         await handle_admin_reply(update, context)
         return
 
     question_id = f"Q{question_counter}"
-    save_question(user.id, user.username or user.first_name, question, question_id)
+    save_question(user.id, user.username or user.first_name, text, question_id)
     question_counter += 1
 
-    await update.message.reply_text(
-        f"✅ تم استلام سؤالك!\n🆔 رقم السؤال: {question_id}\n⏰ {datetime.now().strftime('%H:%M')}"
-    )
+    await update.message.reply_text(f"✅ تم استلام سؤالك!\n🆔 رقم: {question_id}")
 
     keyboard = [
         [InlineKeyboardButton("📝 إرسال إجابة", callback_data=f"answer_{question_id}")],
@@ -76,61 +73,30 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 إعادة ضبط العداد", callback_data="reset_counter")]
     ]
 
+    msg = (
+        f"📩 *سؤال جديد!*\n\n"
+        f"🆔 `{question_id}`\n"
+        f"👤 {user.first_name} (@{user.username})\n"
+        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"❓ {text}"
+    )
+
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=(
-            f"📩 *سؤال جديد!*\n\n"
-            f"🆔 `{question_id}`\n"
-            f"👤 من: {user.first_name} (@{user.username})\n"
-            f"❓ {question}\n"
-            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        ),
+        text=msg,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.from_user.id != ADMIN_ID:
-        await query.edit_message_text("❌ هذا الزر مخصص للأدمن فقط.")
-        return
-
-    data = query.data
-
-    if data.startswith("answer_"):
-        qid = data.split("_")[1]
-        if qid in pending_questions:
-            admin_answer_state[ADMIN_ID] = qid
-            await query.edit_message_text(f"✏️ اكتب الآن إجابتك على السؤال `{qid}`", parse_mode='Markdown')
-        else:
-            await query.edit_message_text("❌ السؤال غير موجود.")
-
-    elif data.startswith("delete_"):
-        qid = data.split("_")[1]
-        if qid in pending_questions:
-            del pending_questions[qid]
-            await query.edit_message_text(f"🗑️ تم حذف السؤال {qid}.")
-        else:
-            await query.edit_message_text("❌ لم يتم العثور على السؤال.")
-
-    elif data == "reset_counter":
-        global question_counter
-        question_counter = 1
-        await query.edit_message_text(
-            "🔄 تم إعادة تعيين عداد الأسئلة. التالي سيكون: Q1",
-            parse_mode='Markdown'
-        )
-
+# رد الأدمن
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ADMIN_ID not in admin_answer_state:
-        await update.message.reply_text("❗ اضغط على زر (📝 إرسال إجابة) أولاً لاختيار سؤال.")
+        await update.message.reply_text("❗ اضغط على زر (📝 إرسال إجابة) أولاً.")
         return
 
     question_id = admin_answer_state[ADMIN_ID]
     if question_id not in pending_questions:
-        await update.message.reply_text("❌ لم يتم العثور على السؤال.")
+        await update.message.reply_text("❌ السؤال غير موجود.")
         del admin_answer_state[ADMIN_ID]
         return
 
@@ -144,29 +110,50 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text=(
                 f"✅ *تم الرد على سؤالك!*\n\n"
                 f"🆔 {question_id}\n"
-                f"❓ سؤالك:\n{q_data['question']}\n\n"
-                f"💬 الإجابة:\n{answer}"
+                f"❓ {q_data['question']}\n\n"
+                f"💬 {answer}"
             ),
             parse_mode='Markdown'
         )
         q_data['status'] = 'answered'
         q_data['answer'] = answer
         q_data['answered_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        await update.message.reply_text(f"✅ تم إرسال الإجابة للسؤال {question_id}.")
+        await update.message.reply_text(f"✅ تم إرسال الإجابة.")
     except Exception as e:
-        await update.message.reply_text(f"❌ خطأ في الإرسال: {str(e)}")
+        await update.message.reply_text(f"❌ فشل الإرسال: {str(e)}")
 
     del admin_answer_state[ADMIN_ID]
 
+# عرض الأسئلة المعلقة مع أزرار
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    pending = [f"`{k}` - {v['username']} - {q_data['question']}" for k, v , m in pending_questions.items() if v['status'] == 'pending']
+
+    pending = {k: v for k, v in pending_questions.items() if v['status'] == 'pending'}
     if not pending:
         await update.message.reply_text("✅ لا توجد أسئلة معلقة.")
-    else:
-        await update.message.reply_text("🕐 *الأسئلة المعلقة:*\n" + "\n".join(pending), parse_mode='Markdown')
+        return
 
+    for question_id, data in sorted(pending.items(), key=lambda x: int(x[0][1:])):
+        text = (
+            f"🆔 `{question_id}`\n"
+            f"👤 {data['username']} (ID: {data['user_id']})\n"
+            f"⏰ {data['timestamp']}\n\n"
+            f"❓ {data['question']}"
+        )
+        keyboard = [
+            [InlineKeyboardButton("📝 إرسال إجابة", callback_data=f"answer_{question_id}")],
+            [InlineKeyboardButton("🗑️ حذف السؤال", callback_data=f"delete_{question_id}")],
+            [InlineKeyboardButton("🔄 إعادة ضبط العداد", callback_data="reset_counter")]
+        ]
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+# زر الإحصائيات
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -175,22 +162,55 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending = total - answered
     await update.message.reply_text(
         f"📊 الإحصائيات:\n"
-        f"📦 إجمالي: {total}\n"
-        f"✅ مُجاب عليها: {answered}\n"
-        f"⏳ في الانتظار: {pending}",
-        parse_mode='Markdown'
+        f"📥 الكل: {total}\n"
+        f"✅ المُجاب: {answered}\n"
+        f"⏳ المعلق: {pending}"
     )
 
+# إعادة تعيين العداد
 async def reset_counter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     global question_counter
     question_counter = 1
-    await update.message.reply_text("🔄 تم إعادة تعيين عداد الأسئلة. التالي سيكون: Q1")
+    await update.message.reply_text("🔄 تم إعادة تعيين العداد. التالي سيكون: Q1")
 
+# أزرار الأدمن
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.from_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ غير مصرح.")
+        return
+
+    data = query.data
+
+    if data.startswith("answer_"):
+        qid = data.split("_")[1]
+        if qid in pending_questions:
+            admin_answer_state[ADMIN_ID] = qid
+            await query.edit_message_text(f"✏️ أرسل الآن إجابتك للسؤال `{qid}`", parse_mode='Markdown')
+        else:
+            await query.edit_message_text("❌ السؤال غير موجود.")
+
+    elif data.startswith("delete_"):
+        qid = data.split("_")[1]
+        if qid in pending_questions:
+            del pending_questions[qid]
+            await query.edit_message_text(f"🗑️ تم حذف السؤال {qid}.")
+        else:
+            await query.edit_message_text("❌ السؤال غير موجود.")
+
+    elif data == "reset_counter":
+        global question_counter
+        question_counter = 1
+        await query.edit_message_text("🔄 تم إعادة ضبط العداد إلى Q1.")
+
+# معالج أخطاء
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Error:", exc_info=context.error)
+    logger.error("❌ Error:", exc_info=context.error)
 
+# تشغيل البوت
 def main():
     update_question_counter()
     app = Application.builder().token(BOT_TOKEN).build()
@@ -199,7 +219,8 @@ def main():
     app.add_handler(CommandHandler("pending", show_pending))
     app.add_handler(CommandHandler("stats", show_stats))
     app.add_handler(CommandHandler("reset_counter", reset_counter_cmd))
-    app.add_handler(CallbackQueryHandler(handle_button))
+    app.add_handler(CallbackQueryHandler(handle_buttons))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(user_id=ADMIN_ID), handle_admin_reply))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
     app.add_error_handler(error_handler)
