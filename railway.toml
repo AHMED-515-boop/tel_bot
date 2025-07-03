@@ -1,9 +1,7 @@
 [build]
-builder = "NIXPACKS"
+builder = "nixpacks"
 
 [deploy]
-start = "python main.py"
-
-[env]
-BOT_TOKEN = "7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
-ADMIN_CHAT_ID = "8011237487"
+startCommand = "python main.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
