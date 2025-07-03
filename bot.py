@@ -1,318 +1,463 @@
-﻿import os
+# requirements.txt
+python-telegram-bot==20.7
+sqlite3
+
+# Procfile
+web: python main.py
+
+# railway.json
+{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
+
+# .env (create this file and add your variables)
+BOT_TOKEN="7910999203:AAFEmX2G-q4vw8Mtf8JJ-x1TSCsNzn09Ch4"
+ADMIN_CHAT_ID="8011237487"
+
+# main.py (Updated version for Railway deployment)
 import logging
 import json
-from datetime import datetime
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from datetime import datetime
+import sqlite3
+from pathlib import Path
 
-# إعداد السجلات
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# التوكن الخاص بك
-BOT_TOKEN = os.environ.get('7750811448:AAHP0G9tkIwNxWyvyO2NH0t5U25Df6_dTrI') or "7750811448:AAHP0G9tkIwNxWyvyO2NH0t5U25Df6_dTrI"
+# Bot configuration - Using environment variables for Railway
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 
-# معرف الأدمن (ضع معرفك هنا)
-ADMIN_ID = os.environ.get('8011237487') or 8011237487  # ضع معرفك هنا
+# Validate environment variables
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required")
+if not ADMIN_CHAT_ID:
+    raise ValueError("ADMIN_CHAT_ID environment variable is required")
 
-# قاموس لحفظ الأسئلة المعلقة
-pending_questions = {}
-question_counter = 1
-
-# دالة لحفظ البيانات (في الذاكرة فقط)
-def save_question(user_id, username, question, question_id):
-    global pending_questions
-    pending_questions[question_id] = {
-        'user_id': user_id,
-        'username': username,
-        'question': question,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'status': 'pending'
-    }
-
-# دالة البداية للمستخدمين العاديين
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+class SupportBot:
+    def __init__(self):
+        self.db_path = Path("support_bot.db")
+        self.init_database()
     
-    if user.id == int(ADMIN_ID):
-        await update.message.reply_text(
-            f"مرحباً بك يا أدمن! 👨‍💼\n\n"
-            "أنت الآن في وضع الإدارة. ستتلقى جميع الأسئلة هنا.\n\n"
-            "الأوامر المتاحة:\n"
-            "/pending - عرض الأسئلة المعلقة\n"
-            "/stats - إحصائيات البوت\n"
-            "/broadcast - إرسال رسالة للجميع"
-        )
-    else:
-        await update.message.reply_text(
-            f"مرحباً {user.first_name}! 👋\n\n"
-            "أنا بوت الأسئلة والأجوبة 🤖\n\n"
-            "يمكنك إرسال أي سؤال لي وسأقوم بتوصيله للمختص،\n"
-            "وبمجرد الإجابة عليه ستتلقى الرد! 📩\n\n"
-            "فقط اكتب سؤالك واضغط إرسال 📝"
-        )
-
-# دالة استقبال الأسئلة
-async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global question_counter
-    
-    user = update.effective_user
-    question = update.message.text
-    
-    # إذا كان المرسل هو الأدمن
-    if user.id == int(ADMIN_ID):
-        await handle_admin_response(update, context)
-        return
-    
-    # حفظ السؤال
-    question_id = f"Q{question_counter}"
-    save_question(user.id, user.username or user.first_name, question, question_id)
-    question_counter += 1
-    
-    # إرسال تأكيد للمستخدم
-    await update.message.reply_text(
-        f"✅ تم استلام سؤالك!\n\n"
-        f"🆔 رقم السؤال: {question_id}\n"
-        f"⏰ الوقت: {datetime.now().strftime('%H:%M')}\n\n"
-        f"سيتم الرد عليك في أقرب وقت ممكن! 🕐"
-    )
-    
-    # إرسال السؤال للأدمن
-    if int(ADMIN_ID) > 0:
-        admin_message = f"📩 *سؤال جديد!*\n\n"
-        admin_message += f"🆔 رقم السؤال: `{question_id}`\n"
-        admin_message += f"👤 من: {user.first_name}"
-        if user.username:
-            admin_message += f" (@{user.username})"
-        admin_message += f"\n🆔 المعرف: `{user.id}`\n"
-        admin_message += f"⏰ الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        admin_message += f"❓ السؤال:\n{question}\n\n"
-        admin_message += f"📝 للرد: اكتب `{question_id}` ثم الإجابة"
+    def init_database(self):
+        """Initialize SQLite database for storing questions and answers"""
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()
         
-        # إضافة أزرار سريعة
-        keyboard = [
-            [InlineKeyboardButton("✅ تم الرد", callback_data=f"answered_{question_id}")],
-            [InlineKeyboardButton("❌ حذف السؤال", callback_data=f"delete_{question_id}")],
-            [InlineKeyboardButton("👤 معلومات المستخدم", callback_data=f"info_{user.id}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        try:
-            await context.bot.send_message(
-                chat_id=int(ADMIN_ID),
-                text=admin_message,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+        # Create tables
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                question TEXT,
+                timestamp DATETIME,
+                status TEXT DEFAULT 'pending',
+                admin_reply TEXT,
+                reply_timestamp DATETIME
             )
-        except Exception as e:
-            logger.error(f"خطأ في إرسال الرسالة للأدمن: {e}")
-
-# دالة معالجة ردود الأدمن
-async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message.text
-    
-    # البحث عن رقم السؤال في بداية الرسالة
-    if message.startswith('Q') and ' ' in message:
-        parts = message.split(' ', 1)
-        question_id = parts[0]
-        answer = parts[1]
+        ''')
         
-        # التحقق من وجود السؤال
-        if question_id in pending_questions:
-            question_data = pending_questions[question_id]
-            user_id = question_data['user_id']
-            original_question = question_data['question']
-            
-            # إرسال الإجابة للمستخدم
-            user_message = f"✅ *تم الرد على سؤالك!*\n\n"
-            user_message += f"🆔 رقم السؤال: {question_id}\n"
-            user_message += f"❓ سؤالك كان:\n{original_question}\n\n"
-            user_message += f"💬 الإجابة:\n{answer}\n\n"
-            user_message += f"⏰ وقت الرد: {datetime.now().strftime('%H:%M')}"
-            
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=user_message,
-                    parse_mode='Markdown'
-                )
-                
-                # تحديث حالة السؤال
-                pending_questions[question_id]['status'] = 'answered'
-                pending_questions[question_id]['answer'] = answer
-                pending_questions[question_id]['answered_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                # تأكيد للأدمن
-                await update.message.reply_text(
-                    f"✅ تم إرسال الإجابة بنجاح!\n\n"
-                    f"🆔 السؤال: {question_id}\n"
-                    f"👤 إلى: {question_data['username']}"
-                )
-                
-            except Exception as e:
-                await update.message.reply_text(
-                    f"❌ خطأ في إرسال الإجابة:\n{str(e)}\n\n"
-                    f"قد يكون المستخدم حظر البوت أو حذف المحادثة."
-                )
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT
+            )
+        ''')
+        
+        self.conn.commit()
+        logger.info("Database initialized successfully")
+    
+    def add_admin(self, user_id, username):
+        """Add admin to database"""
+        self.cursor.execute(
+            "INSERT OR REPLACE INTO admins (user_id, username) VALUES (?, ?)",
+            (user_id, username)
+        )
+        self.conn.commit()
+    
+    def is_admin(self, user_id):
+        """Check if user is admin"""
+        self.cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+        return self.cursor.fetchone() is not None
+    
+    def save_question(self, user_id, username, question):
+        """Save user question to database"""
+        self.cursor.execute(
+            "INSERT INTO questions (user_id, username, question, timestamp) VALUES (?, ?, ?, ?)",
+            (user_id, username, question, datetime.now())
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+    
+    def get_pending_questions(self):
+        """Get all pending questions"""
+        self.cursor.execute(
+            "SELECT id, user_id, username, question, timestamp FROM questions WHERE status = 'pending' ORDER BY timestamp DESC"
+        )
+        return self.cursor.fetchall()
+    
+    def get_question_by_id(self, question_id):
+        """Get specific question by ID"""
+        self.cursor.execute(
+            "SELECT id, user_id, username, question, timestamp FROM questions WHERE id = ?",
+            (question_id,)
+        )
+        return self.cursor.fetchone()
+    
+    def update_question_status(self, question_id, status, admin_reply=None):
+        """Update question status and admin reply"""
+        if admin_reply:
+            self.cursor.execute(
+                "UPDATE questions SET status = ?, admin_reply = ?, reply_timestamp = ? WHERE id = ?",
+                (status, admin_reply, datetime.now(), question_id)
+            )
         else:
-            await update.message.reply_text(
-                f"❌ لم يتم العثور على السؤال: {question_id}\n\n"
-                f"استخدم /pending لرؤية الأسئلة المعلقة"
+            self.cursor.execute(
+                "UPDATE questions SET status = ? WHERE id = ?",
+                (status, question_id)
             )
-    else:
-        await update.message.reply_text(
-            "📝 تنسيق الرد:\n"
-            "`Q1 هنا الإجابة على السؤال`\n\n"
-            "مثال:\n"
-            "`Q1 هذه إجابة سؤالك`\n\n"
-            "استخدم /pending لرؤية الأسئلة المعلقة"
-        )
+        self.conn.commit()
 
-# دالة عرض الأسئلة المعلقة
-async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != int(ADMIN_ID):
-        await update.message.reply_text("❌ هذا الأمر للأدمن فقط!")
-        return
-    
-    pending = [q for q in pending_questions.values() if q['status'] == 'pending']
-    
-    if not pending:
-        await update.message.reply_text("✅ لا توجد أسئلة معلقة!")
-        return
-    
-    message = f"📋 *الأسئلة المعلقة ({len(pending)}):*\n\n"
-    
-    for q_id, data in pending_questions.items():
-        if data['status'] == 'pending':
-            message += f"🆔 `{q_id}` - {data['username']}\n"
-            message += f"⏰ {data['timestamp']}\n"
-            message += f"❓ {data['question'][:50]}{'...' if len(data['question']) > 50 else ''}\n\n"
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
+# Initialize bot instance
+support_bot = SupportBot()
 
-# دالة الإحصائيات
-async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != int(ADMIN_ID):
-        await update.message.reply_text("❌ هذا الأمر للأدمن فقط!")
-        return
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    user = update.effective_user
     
-    total = len(pending_questions)
-    answered = len([q for q in pending_questions.values() if q['status'] == 'answered'])
-    pending = len([q for q in pending_questions.values() if q['status'] == 'pending'])
-    
-    stats_message = f"📊 *إحصائيات البوت:*\n\n"
-    stats_message += f"📝 إجمالي الأسئلة: {total}\n"
-    stats_message += f"✅ تم الرد عليها: {answered}\n"
-    stats_message += f"⏳ في الانتظار: {pending}\n"
-    stats_message += f"📈 معدل الإجابة: {(answered/total*100):.1f}%" if total > 0 else "📈 معدل الإجابة: 0%"
-    
-    await update.message.reply_text(stats_message, parse_mode='Markdown')
+    welcome_message = f"""
+🤖 Welcome to Support Bot, {user.first_name}!
 
-# دالة معالجة الأزرار
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.from_user.id != int(ADMIN_ID):
-        await query.edit_message_text("❌ غير مسموح!")
-        return
-    
-    data = query.data
-    
-    if data.startswith('answered_'):
-        question_id = data.split('_')[1]
-        if question_id in pending_questions:
-            pending_questions[question_id]['status'] = 'answered'
-            await query.edit_message_text(
-                f"✅ تم تحديد السؤال {question_id} كمُجاب عليه"
-            )
-    
-    elif data.startswith('delete_'):
-        question_id = data.split('_')[1]
-        if question_id in pending_questions:
-            del pending_questions[question_id]
-            await query.edit_message_text(
-                f"🗑️ تم حذف السؤال {question_id}"
-            )
-    
-    elif data.startswith('info_'):
-        user_id = data.split('_')[1]
-        user_questions = [q for q in pending_questions.values() if str(q['user_id']) == user_id]
-        
-        info_message = f"👤 *معلومات المستخدم:*\n\n"
-        info_message += f"🆔 المعرف: `{user_id}`\n"
-        info_message += f"📝 عدد الأسئلة: {len(user_questions)}\n"
-        
-        if user_questions:
-            info_message += f"🕐 آخر سؤال: {user_questions[-1]['timestamp']}"
-        
-        await query.edit_message_text(info_message, parse_mode='Markdown')
+I'm here to help you get support from our administrators.
 
-# دالة المساعدة للأدمن
-async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != int(ADMIN_ID):
-        await update.message.reply_text("❌ هذا الأمر للأدمن فقط!")
-        return
+📝 Simply send me your question and I'll forward it to our admin team.
+⏰ You'll receive a response as soon as possible.
+
+Commands:
+/help - Show this help message
+/status - Check your question status (for admins)
+/questions - View pending questions (admin only)
+"""
     
+    await update.message.reply_text(welcome_message)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
     help_text = """
-🔧 *أوامر الأدمن:*
+🆘 *Support Bot Help*
 
-📋 `/pending` - عرض الأسئلة المعلقة
-📊 `/stats` - إحصائيات البوت
-❓ `/help` - هذه المساعدة
+*For Users:*
+• Send any message with your question
+• I'll forward it to our admin team
+• Wait for a response from administrators
 
-📝 *طريقة الرد على الأسئلة:*
-`Q1 هنا الإجابة`
+*For Admins:*
+• `/questions` - View all pending questions
+• `/status` - Check bot status
+• Reply to forwarded messages to answer questions
 
-مثال:
-`Q1 مرحباً، إجابة سؤالك هي...`
-
-💡 *نصائح:*
-• استخدم الأزرار للإجراءات السريعة
-• يمكنك نسخ رقم السؤال من الرسالة
-• البوت يحفظ تاريخ كل سؤال وإجابة
-    """
+*How it works:*
+1. User sends a question
+2. Bot forwards to admin
+3. Admin replies to the forwarded message
+4. Bot sends admin's reply back to user
+"""
     
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-# دالة معالجة الأخطاء
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Exception while handling an update:", exc_info=context.error)
-
-def main():
-    if not BOT_TOKEN or BOT_TOKEN == "ضع_التوكن_هنا":
-        print("❌ خطأ: يجب إضافة BOT_TOKEN")
+async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user questions"""
+    user = update.effective_user
+    question = update.message.text
+    
+    # Don't process commands as questions
+    if question.startswith('/'):
         return
     
-    if not ADMIN_ID or ADMIN_ID == 0:
-        print("⚠️ تحذير: يجب إضافة ADMIN_ID لتلقي الأسئلة")
-        print("لمعرفة معرفك، أرسل رسالة لبوت @userinfobot")
+    # Save question to database
+    question_id = support_bot.save_question(
+        user.id, 
+        user.username or user.first_name, 
+        question
+    )
     
-    # إنشاء التطبيق
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Send confirmation to user
+    await update.message.reply_text(
+        f"✅ Your question has been received!\n\n"
+        f"Question ID: #{question_id}\n"
+        f"Our admin team will respond soon."
+    )
     
-    # إضافة معالجات الأوامر
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("pending", show_pending))
-    app.add_handler(CommandHandler("stats", show_stats))
-    app.add_handler(CommandHandler("help", admin_help))
+    # Forward to admin with inline keyboard
+    admin_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Answer", callback_data=f"answer_{question_id}"),
+            InlineKeyboardButton("❌ Close", callback_data=f"close_{question_id}")
+        ]
+    ])
     
-    # معالج الأزرار
-    app.add_handler(CallbackQueryHandler(button_handler))
+    admin_message = f"""
+🔔 *New Question Received*
+
+*From:* {user.first_name} (@{user.username or 'No username'})
+*User ID:* `{user.id}`
+*Question ID:* #{question_id}
+*Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+*Question:*
+{question}
+"""
     
-    # معالج الرسائل النصية
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_message,
+            reply_markup=admin_keyboard,
+            parse_mode='Markdown'
+        )
+        logger.info(f"Question #{question_id} forwarded to admin")
+    except Exception as e:
+        logger.error(f"Failed to send message to admin: {e}")
+
+async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin callback buttons"""
+    query = update.callback_query
+    user_id = query.from_user.id
     
-    # معالج الأخطاء
-    app.add_error_handler(error_handler)
+    # Check if user is admin
+    if not support_bot.is_admin(user_id):
+        await query.answer("❌ You are not authorized to use this feature.")
+        return
     
-    # تشغيل البوت
-    print("🚀 بوت الأسئلة والأجوبة يعمل الآن...")
-    print(f"📧 معرف الأدمن: {ADMIN_ID}")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    data = query.data
+    action, question_id = data.split('_')
+    question_id = int(question_id)
+    
+    if action == "answer":
+        await query.answer("📝 Please reply to this message with your answer.")
+        # Store the question ID in user data for the next message
+        context.user_data['answering_question'] = question_id
+        
+    elif action == "close":
+        support_bot.update_question_status(question_id, "closed")
+        await query.answer("✅ Question closed.")
+        
+        # Update the message to show it's closed
+        await query.edit_message_text(
+            text=query.message.text + "\n\n❌ *Question Closed*",
+            parse_mode='Markdown'
+        )
+
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin replies to questions"""
+    user_id = update.effective_user.id
+    
+    # Check if user is admin
+    if not support_bot.is_admin(user_id):
+        return
+    
+    # Check if admin is answering a question
+    if 'answering_question' not in context.user_data:
+        return
+    
+    question_id = context.user_data['answering_question']
+    admin_reply = update.message.text
+    
+    # Get the original question
+    question_data = support_bot.get_question_by_id(question_id)
+    if not question_data:
+        await update.message.reply_text("❌ Question not found.")
+        return
+    
+    _, original_user_id, username, original_question, timestamp = question_data
+    
+    # Update question status
+    support_bot.update_question_status(question_id, "answered", admin_reply)
+    
+    # Send reply to original user
+    user_message = f"""
+✅ *Your Question Has Been Answered*
+
+*Your Question:*
+{original_question}
+
+*Admin Reply:*
+{admin_reply}
+
+*Question ID:* #{question_id}
+"""
+    
+    try:
+        await context.bot.send_message(
+            chat_id=original_user_id,
+            text=user_message,
+            parse_mode='Markdown'
+        )
+        
+        await update.message.reply_text(
+            f"✅ Reply sent to user!\n\n"
+            f"Question ID: #{question_id}\n"
+            f"User: {username}"
+        )
+        
+        logger.info(f"Reply sent for question #{question_id}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send reply to user: {e}")
+        logger.error(f"Failed to send reply to user: {e}")
+    
+    # Clear the answering state
+    del context.user_data['answering_question']
+
+async def view_questions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View all pending questions (admin only)"""
+    user_id = update.effective_user.id
+    
+    if not support_bot.is_admin(user_id):
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    questions = support_bot.get_pending_questions()
+    
+    if not questions:
+        await update.message.reply_text("📭 No pending questions.")
+        return
+    
+    message = "📋 *Pending Questions:*\n\n"
+    
+    for q_id, user_id, username, question, timestamp in questions:
+        message += f"*Question #{q_id}*\n"
+        message += f"From: {username}\n"
+        message += f"Time: {timestamp}\n"
+        message += f"Question: {question[:100]}{'...' if len(question) > 100 else ''}\n\n"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add admin (use this command initially to set up admins)"""
+    user = update.effective_user
+    support_bot.add_admin(user.id, user.username or user.first_name)
+    await update.message.reply_text(f"✅ {user.first_name} added as admin!")
+    logger.info(f"Admin added: {user.first_name} (ID: {user.id})")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check bot status"""
+    user_id = update.effective_user.id
+    
+    if not support_bot.is_admin(user_id):
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    # Get database stats
+    support_bot.cursor.execute("SELECT COUNT(*) FROM questions")
+    total_questions = support_bot.cursor.fetchone()[0]
+    
+    support_bot.cursor.execute("SELECT COUNT(*) FROM questions WHERE status = 'pending'")
+    pending_questions = support_bot.cursor.fetchone()[0]
+    
+    support_bot.cursor.execute("SELECT COUNT(*) FROM admins")
+    total_admins = support_bot.cursor.fetchone()[0]
+    
+    status_message = f"""
+📊 *Bot Status*
+
+*Database:* ✅ Connected
+*Total Questions:* {total_questions}
+*Pending Questions:* {pending_questions}
+*Total Admins:* {total_admins}
+
+*Environment:* Railway
+*Status:* 🟢 Online
+"""
+    
+    await update.message.reply_text(status_message, parse_mode='Markdown')
+
+def main():
+    """Start the bot"""
+    try:
+        # Create application
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("questions", view_questions))
+        application.add_handler(CommandHandler("addadmin", add_admin_command))
+        application.add_handler(CommandHandler("status", status_command))
+        
+        # Callback query handler for admin buttons
+        application.add_handler(CallbackQueryHandler(handle_admin_callback))
+        
+        # Message handlers
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, 
+            lambda update, context: (
+                handle_admin_reply(update, context) 
+                if support_bot.is_admin(update.effective_user.id) and 'answering_question' in context.user_data
+                else handle_question(update, context)
+            )
+        ))
+        
+        # Start the bot
+        logger.info("🤖 Support Bot is starting on Railway...")
+        print("🤖 Support Bot is starting on Railway...")
+        
+        # Use webhook for Railway deployment
+        PORT = int(os.environ.get('PORT', 8000))
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"https://{os.environ.get('RAILWAY_STATIC_URL', 'localhost')}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        print(f"Failed to start bot: {e}")
 
 if __name__ == '__main__':
     main()
+
+# .gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+*.db
+*.sqlite3
+.env
+.DS_Store
+
+# runtime.txt
+python-3.11.0
